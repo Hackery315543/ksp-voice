@@ -2,3 +2,4 @@ flask
 requests
 edge-tts
 gunicorn
+psycopg2-binary
