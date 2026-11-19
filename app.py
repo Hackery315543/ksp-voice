@@ -2,7 +2,7 @@ import os
 import json
 import time
 import asyncio
-import sqlite3
+import psycopg2
 from flask import Flask, request, jsonify
 import requests
 import edge_tts
@@ -17,53 +17,60 @@ VOICE_COST = 100
 
 WEBAPP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ksp-voice.onrender.com").rstrip("/") + "/"
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
-DB_PATH = "/tmp/users.db"
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id TEXT PRIMARY KEY, balance INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS processed_tx
                  (msg_id TEXT PRIMARY KEY)''')
     conn.commit()
+    c.close()
     conn.close()
 
 init_db()
 
 def get_balance(user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT balance FROM users WHERE user_id = ?", (str(user_id),))
+    c.execute("SELECT balance FROM users WHERE user_id = %s", (str(user_id),))
     row = c.fetchone()
     if row is None:
-        c.execute("INSERT INTO users (user_id, balance) VALUES (?, 0)", (str(user_id),))
+        c.execute("INSERT INTO users (user_id, balance) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (str(user_id),))
         conn.commit()
         bal = 0
     else:
         bal = row[0]
+    c.close()
     conn.close()
     return bal
 
 def update_balance(user_id, amount):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (str(user_id),))
-    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (int(amount), str(user_id)))
+    c.execute("INSERT INTO users (user_id, balance) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (str(user_id),))
+    c.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (int(amount), str(user_id)))
     conn.commit()
-    c.execute("SELECT balance FROM users WHERE user_id = ?", (str(user_id),))
+    c.execute("SELECT balance FROM users WHERE user_id = %s", (str(user_id),))
     new_bal = c.fetchone()[0]
+    c.close()
     conn.close()
     return new_bal
 
 def is_tx_processed(msg_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT msg_id FROM processed_tx WHERE msg_id = ?", (str(msg_id),))
+    c.execute("SELECT msg_id FROM processed_tx WHERE msg_id = %s", (str(msg_id),))
     exists = c.fetchone() is not None
     if not exists:
-        c.execute("INSERT INTO processed_tx (msg_id) VALUES (?)", (str(msg_id),))
+        c.execute("INSERT INTO processed_tx (msg_id) VALUES (%s) ON CONFLICT (msg_id) DO NOTHING", (str(msg_id),))
         conn.commit()
+    c.close()
     conn.close()
     return exists
 
